@@ -1,0 +1,149 @@
+apply plugin: 'com.android.library'
+apply from: '../base.gradle'
+
+dependencies {
+    api fileTree(dir: 'libs', include: ['*.jar'])
+
+}
+
+android {
+    compileSdkVersion 31
+    buildToolsVersion '30.0.3'
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a'
+        }
+        versionCode 1
+        versionName '0.0.1'
+        consumerProguardFiles 'proguard-unity.txt'
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+
+    aaptOptions {
+        noCompress = ['.unity3d', '.ress', '.resource', '.obb', '.bundle', '.unityexp'] + unityStreamingAssets.tokenize(', ')
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~"
+    }
+
+    packagingOptions {
+        doNotStrip '*/armeabi-v7a/*.so'
+        doNotStrip '*/arm64-v8a/*.so'
+    }
+}
+
+def getSdkDir() {
+    File localPropertiesFile = new File(rootDir, "local.properties")
+    if (localPropertiesFile.exists()) {
+        Properties properties = new Properties()
+        properties.load(new FileInputStream(localPropertiesFile))
+        return properties.getProperty('sdk.dir')
+    } else {
+        return System.getenv()["ANDROID_HOME"]
+    }
+}
+
+def getNdkDir() {
+    File localPropertiesFile = new File(rootDir, "local.properties")
+    if (localPropertiesFile.exists()) {
+        Properties properties = new Properties()
+        properties.load(new FileInputStream(localPropertiesFile))
+        String ndkDir = properties.getProperty('ndk.dir')
+        if (ndkDir != null) {
+            return ndkDir
+        }
+    }
+
+    return System.getenv()["ANDROID_NDK_R21D_HOME"]
+}
+
+def BuildIl2Cpp(String workingDir, String configuration, String architecture, String abi, String[] staticLibraries) {
+    def commandLineArgs = []
+    commandLineArgs.add("--compile-cpp")
+    commandLineArgs.add("--platform=Android")
+    commandLineArgs.add("--architecture=" + architecture)
+    commandLineArgs.add("--outputpath=" + workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.so")
+    commandLineArgs.add("--libil2cpp-static")
+    commandLineArgs.add("--baselib-directory=" + workingDir + "/src/main/jniStaticLibs/" + abi)
+    commandLineArgs.add("--incremental-g-c-time-slice=3")
+    commandLineArgs.add("--configuration=" + configuration)
+    commandLineArgs.add("--dotnetprofile=unityaot-linux")
+    commandLineArgs.add("--profiler-report")
+    commandLineArgs.add("--profiler-output-file=" + workingDir + "/build/il2cpp_"+ abi + "_" + configuration + "/il2cpp_conv.traceevents")
+    commandLineArgs.add("--print-command-line")
+    commandLineArgs.add("--generatedcppdir=" + workingDir + "/src/main/Il2CppOutputProject/Source/il2cppOutput")
+    commandLineArgs.add("--cachedirectory=" + workingDir + "/build/il2cpp_"+ abi + "_" + configuration + "/il2cpp_cache")
+    commandLineArgs.add("--tool-chain-path=" + getNdkDir())
+    staticLibraries.eachWithIndex {fileName, i->
+        commandLineArgs.add("--additional-libraries=" + workingDir + "/src/main/jniStaticLibs/" + abi + "/" + fileName)
+    }
+    def executableExtension = ""
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows())
+        executableExtension = ".exe"
+    exec {
+        executable workingDir + "/src/main/Il2CppOutputProject/IL2CPP/build/deploy/il2cpp" + executableExtension
+        args commandLineArgs
+        environment "ANDROID_SDK_ROOT", getSdkDir()
+    }
+
+    ext.onIlCppBuilt(workingDir, abi)
+
+    delete workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.sym.so"
+    ant.move(file: workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.dbg.so", tofile: workingDir + "/symbols/" + abi + "/libil2cpp.so")
+}
+
+android {
+    task BuildIl2CppTask {
+        doLast {
+            File Il2CppOutputProjectFile = new File(projectDir, "\\src\\main\\Il2CppOutputProject")
+            println "Il2CppOutputProjectFile-->:" + Il2CppOutputProjectFile;
+            if (Il2CppOutputProjectFile.exists()) {
+                println "Il2CppOutputProjectFile-->:是il2cpp打包"
+                File v8Dir = new File(projectDir, "\\src\\main\\jniLibs\\arm64-v8a")
+                println "v8Dir-->:" + v8Dir;
+                if (v8Dir.exists()) {
+                    println "BuildIl2CppTask 支持64位";
+                    File il2cppSo = new File(projectDir, "\\src\\main\\jniLibs\\arm64-v8a\\libil2cpp.so")
+                    if (!il2cppSo.exists()) {
+                        println "BuildIl2CppTask 64位 so文件不存在 编译";
+                        BuildIl2Cpp(projectDir.toString().replaceAll('\\\\', '/'), 'Release', 'arm64', 'arm64-v8a', [  ] as String[]);
+                    }
+                }
+                File v7Dir = new File(projectDir, "\\src\\main\\jniLibs\\armeabi-v7a")
+                println "v7Dir-->:" + v7Dir;
+                if (v7Dir.exists()) {
+                    println "BuildIl2CppTask 支持32位";
+                    File il2cppSo = new File(projectDir, "\\src\\main\\jniLibs\\armeabi-v7a\\libil2cpp.so")
+                    if (!il2cppSo.exists()) {
+                        println "BuildIl2CppTask 32位 so文件不存在 编译";
+                        BuildIl2Cpp(projectDir.toString().replaceAll('\\\\', '/'), 'Release', 'armv7', 'armeabi-v7a', [  ] as String[]);
+                    }
+                }
+            }
+        }
+    }
+    afterEvaluate {
+        buildTypes.all { buildType ->
+            def buildTypeName = buildType.name.capitalize()
+            def taskName = "merge${buildTypeName}JniLibFolders"
+            if (project.tasks.findByName(taskName)) {
+                project."$taskName".dependsOn BuildIl2CppTask
+            }
+        }
+    }
+    sourceSets {
+        main {
+            jni.srcDirs = ["src/main/Il2CppOutputProject"]
+        }
+    }
+}
+
+
+
