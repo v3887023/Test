@@ -3,6 +3,8 @@ apply from: '../base.gradle'
 
 dependencies {
     api fileTree(dir: 'libs', include: ['*.jar'])
+    api(name: 'OMUnityBridge', ext:'aar')
+    api(name: 'NatRender', ext:'aar')
 
 }
 
@@ -72,7 +74,6 @@ def BuildIl2Cpp(String workingDir, String configuration, String architecture, St
     commandLineArgs.add("--outputpath=" + workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.so")
     commandLineArgs.add("--libil2cpp-static")
     commandLineArgs.add("--baselib-directory=" + workingDir + "/src/main/jniStaticLibs/" + abi)
-    commandLineArgs.add("--incremental-g-c-time-slice=3")
     commandLineArgs.add("--configuration=" + configuration)
     commandLineArgs.add("--dotnetprofile=unityaot-linux")
     commandLineArgs.add("--profiler-report")
@@ -91,9 +92,9 @@ def BuildIl2Cpp(String workingDir, String configuration, String architecture, St
         executable workingDir + "/src/main/Il2CppOutputProject/IL2CPP/build/deploy/il2cpp" + executableExtension
         args commandLineArgs
         environment "ANDROID_SDK_ROOT", getSdkDir()
-    }
-
+    }
     ext.onIlCppBuilt(workingDir, abi)
+
 
     delete workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.sym.so"
     ant.move(file: workingDir + "/src/main/jniLibs/" + abi + "/libil2cpp.dbg.so", tofile: workingDir + "/symbols/" + abi + "/libil2cpp.so")
